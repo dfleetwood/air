@@ -17,10 +17,10 @@ extends Node3D
 
 const BirdScript := preload("res://bird.gd")
 
-# Filaments, not motes. A few thousand streaklines read as wind; twenty thousand
-# dots read as fog.
-const QUALITY := [200, 450, 900]
+# How thick the dye is allowed to be, and how far it reaches. Written for a 4060;
+# LOW is the HD 620 fallback and it does not look good, it just runs.
 const QUALITY_NAMES := ["LOW", "MEDIUM", "HIGH"]
+const FOG_LENGTH := [110.0, 190.0, 280.0]
 
 var bird: CharacterBody3D
 var particles: GPUParticles3D
@@ -59,6 +59,7 @@ func _ready() -> void:
 		_build_island(island)
 	_spawn_bird()
 	_build_air()
+	_apply_quality()
 	_build_hud()
 	_demo = OS.get_cmdline_user_args().has("demo")
 	if _demo:
@@ -75,7 +76,7 @@ func _process(delta: float) -> void:
 
 	if Input.is_action_just_pressed("quality"):
 		quality = (quality + 1) % 3
-		particles.amount = QUALITY[quality]
+		_apply_quality()
 	if Input.is_action_just_pressed("reveal"):
 		revealed = not revealed
 		for m in reveal_meshes:
@@ -193,10 +194,10 @@ func _build_environment() -> void:
 	# The medium is volumetric. It is not a surface, and it is not a line — it is
 	# a thickness of air between you and everything else.
 	env.volumetric_fog_enabled = true
-	env.volumetric_fog_density = 0.0
+	env.volumetric_fog_density = 0.0   # all density comes from the FogVolume
 	env.volumetric_fog_gi_inject = 0.0
-	env.volumetric_fog_length = 140.0
-	env.volumetric_fog_detail_spread = 1.5
+	env.volumetric_fog_length = 190.0
+	env.volumetric_fog_detail_spread = 0.8   # keep detail near the bird, not smeared
 	env.volumetric_fog_ambient_inject = 1.0
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -316,23 +317,14 @@ func _build_air() -> void:
 	fog_mat.set_shader_parameter("thermal_p", tp)
 	fog_volume = FogVolume.new()
 	fog_volume.shape = RenderingServer.FOG_VOLUME_SHAPE_BOX
-	fog_volume.size = Vector3(260, 260, 260)
+	fog_volume.size = Vector3(380, 380, 380)
 	fog_volume.material = fog_mat
 	add_child(fog_volume)
 
-	particles = GPUParticles3D.new()
-	particles.process_material = air_mat
-	particles.amount = QUALITY[quality]
-	particles.lifetime = 6.0
-	particles.local_coords = false
-	particles.visibility_aabb = AABB(Vector3(-120, -120, -120), Vector3(240, 240, 240))
-	# The filament IS the trail. Each tracer drags a ribbon along the path it took
-	# through the field, so what you see is not where the air is — it is where the
-	# air has been going.
-	particles.trail_enabled = true
-	particles.trail_lifetime = 0.85   # long enough for an eddy to draw its own curl
-	particles.draw_pass_1 = _filament_mesh()
-	add_child(particles)
+	# NO TRACERS. Dots read as a starfield, filaments read as hair, and both read
+	# as a DIAGRAM of the wind rather than the wind. A fluid is a density, so the
+	# dye above is the whole percept. air.gdshader and air_draw.gdshader are kept
+	# only as a record of the two dead ends.
 
 
 func _filament_mesh() -> Mesh:
@@ -351,20 +343,14 @@ func _filament_mesh() -> Mesh:
 	return tube
 
 
+func _apply_quality() -> void:
+	env.volumetric_fog_length = FOG_LENGTH[quality]
+
+
 func _update_air() -> void:
 	var p := bird.global_position
-	var w := prevailing()
 	fog_volume.global_position = p
-	fog_mat.set_shader_parameter("prevailing", w)
-
-	# The filaments survive, but only as a whisper on top of the smoke: a few
-	# streaklines to say which way the fluid is running. The dye does the rest.
-	particles.global_position = p
-	air_mat.set_shader_parameter("prevailing", w)
-	air_mat.set_shader_parameter("observer", p)
-	# The frame the air is perceived in. See air.gdshader: the bird's own velocity
-	# is subtracted out, so the medium shows its structure and not your speed.
-	air_mat.set_shader_parameter("carrier", bird.velocity)
+	fog_mat.set_shader_parameter("prevailing", prevailing())
 
 
 func _build_hud() -> void:
@@ -383,7 +369,7 @@ func _update_hud() -> void:
 	var vario := "  %+.1f m/s" % _climb
 	if _climb > 1.5:
 		vario += "   ^ LIFT"
-	hud.text = "AIR — the wind sense, alone.   %d fps\n%s   %.0f m/s   alt %.0f m%s\nwind %.1f m/s\n\nfind a thermal you cannot see, and ride it\nmouse aim   WASD walk   SPACE flap/fly   SHIFT brake\nQ tracers: %s   F1 reveal the rock [%s]   R respawn   ESC mouse" % [
+	hud.text = "AIR — the wind sense, alone.   %d fps\n%s   %.0f m/s   alt %.0f m%s\nwind %.1f m/s\n\nfind a thermal you cannot see, and ride it\nmouse aim   WASD walk   SPACE flap/fly   SHIFT brake\nQ reach: %s   F1 reveal the rock [%s]   R respawn   ESC mouse" % [
 		Engine.get_frames_per_second(),
 		bird.state_name(), bird.velocity.length(), bird.global_position.y, vario,
 		wind_strength,

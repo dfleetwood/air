@@ -19,12 +19,13 @@ window/size/viewport_height=900
 
 [rendering]
 
-; The froxel grid the volumetric fog marches. The defaults are desktop-tuned and
-; are exactly what took the HD 620 to 7 fps. The air is a soft, smoky thing —
-; it does not need a fine grid, and it looks no worse on a coarse one.
-environment/volumetric_fog/volume_size=48
-environment/volumetric_fog/volume_depth=96
-environment/volumetric_fog/use_filter=0
+; The froxel grid the volumetric fog marches. Written for an RTX 4060, which eats
+; this comfortably — the air is the entire game here, so it gets the budget. On
+; the HD 620 dev laptop, drop these to 48 / 96 / filter off and expect to crawl.
+environment/volumetric_fog/volume_size=112
+environment/volumetric_fog/volume_depth=192
+environment/volumetric_fog/use_filter=1
+anti_aliasing/quality/msaa_3d=2
 
 [shader_globals]
 

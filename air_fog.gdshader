@@ -21,7 +21,7 @@ uniform float island_r[5];
 uniform vec4 thermals[5];     // xyz = axis, w = radius
 uniform vec4 thermal_p[5];    // x = base, y = top, z = power
 uniform vec3 prevailing;
-uniform float haze = 0.16;
+uniform float haze = 0.007;
 
 const float SQUASH_UP = 0.32;
 const float SQUASH_DOWN = 1.35;
@@ -106,11 +106,10 @@ void fog() {
 	vec3 p = WORLD_POSITION;
 	float d = scene_sdf(p);
 
-	// Rock is a clean hole in the smoke. Air cannot be there, so no dye is.
-	if (d < 0.0) {
-		DENSITY = 0.0;
-		return;
-	}
+	// Rock is a clean hole in the smoke: air cannot be there, so no dye is. This
+	// has to be a MASK and not an early return — `return` is illegal inside a fog
+	// processor, and Godot will fail the compile silently and render you nothing.
+	float air = step(0.0, d);
 
 	vec3 n = scene_grad(p);
 	float surf = 1.0 - smoothstep(0.0, BOUNDARY, d);   // 1 against the rock
@@ -132,22 +131,27 @@ void fog() {
 	// of just sitting in space. This is the cheap stand-in for a solver, and at
 	// these scales the eye cannot tell the difference.
 	vec3 warped = p - flow * TIME * 0.55;
-	float dye = fbm(warped * 0.030);
-	dye = dye * dye * 1.5;
+	// Wispy, not woolly. Sharpening the noise keeps the clear air CLEAR, so that
+	// the structures have somewhere to be seen against. A uniform haze integrated
+	// over two hundred metres is just a grey wall.
+	float dye = fbm(warped * 0.085);
+	dye = pow(clamp(dye, 0.0, 1.0), 2.6) * 2.6;
 
 	// Torn and shredded in a wake; smooth in clean air.
-	float torn = fbm(warped * 0.11 + TIME * 0.25) * lee;
+	float torn = pow(clamp(fbm(warped * 0.22 + TIME * 0.25), 0.0, 1.0), 2.0) * lee;
 
-	float rising = smoothstep(0.6, 4.5, lift);
+	float rising = smoothstep(0.8, 4.5, lift);
 
 	// Thick where it MEANS something: in lift, in a wake, and in the dead still
 	// air that clings to rock — which is the only reason the ground is visible.
-	float dens = haze * (0.55 + dye)
-		+ 1.40 * rising * (0.5 + dye)
-		+ 0.90 * torn
-		+ 1.80 * surf * surf * (0.6 + 0.4 * dye);
+	// These are per-metre extinctions and they integrate over the whole view, so
+	// they have to stay SMALL or the world drowns in milk.
+	float dens = haze * (0.35 + dye)
+		+ 0.055 * rising * (0.6 + dye)
+		+ 0.030 * torn
+		+ 0.075 * surf * surf * (0.6 + 0.4 * dye);
 
-	DENSITY = dens;
+	DENSITY = dens * air;
 
 	vec3 cool = vec3(0.34, 0.45, 0.62);
 	vec3 warm = vec3(1.00, 0.66, 0.32);
@@ -159,7 +163,7 @@ void fog() {
 	// The air is self-luminous. There is no sun here — no sun is PERCEIVED here —
 	// so the medium has to carry its own light, and what it lights up is what it
 	// is doing. Lift glows warm, because it IS warm; that is why it is rising.
-	EMISSION = warm * rising * 2.6
-		+ hush * surf * surf * 0.55
-		+ cool * (0.10 + 0.25 * torn);
+	EMISSION = warm * rising * 1.1
+		+ hush * surf * surf * 0.22
+		+ cool * (0.035 + 0.10 * torn);
 }

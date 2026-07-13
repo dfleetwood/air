@@ -260,6 +260,81 @@ Why this one:
 
 Do not add a second sense until the answer is yes.
 
+### RESULT (2026-07-13): yes.
+
+`air.tscn`, run with `-- demo`, flies an autopilot that is told **nothing** about
+where the thermal is. It samples the wind at its two wingtips and banks toward
+whichever one is being lifted harder. That is all it knows — and it is exactly
+what the player perceives.
+
+    t=  2.0s  alt  35.0   60.7 m from column  (open air)
+    t=  6.0s  alt  37.7    7.6 m from column  (*** IN THE CORE ***)
+    t= 22.0s  alt  59.3    7.0 m from column  (*** IN THE CORE ***)
+    t= 60.0s  alt  83.5   53.2 m from column  (topped out, drifting off)
+
+**35 m to 83.5 m, sixty seconds, not one flap.** The information needed to soar is
+present in the local air, so the percept is flyable. Note it tops out and leaves
+near the column's ceiling, which is what a real thermal does.
+
+What made it findable is that a thermal **draws air in** around its base, so the
+air *at your own body* leans toward a column you are nowhere near. You do not spot
+the thermal; you notice the medium tilting, and follow it upstream. No distant
+rendering, no marker. (`INFLOW_REACH` in `island_field.gd`.)
+
+**A real bug fell out of the measured test:** the bank sign was inverted — raising
+yaw swings the nose *left*, so the bird was steering away from every thermal it
+found. It was in the player's flight too. A visual check would never have caught
+it; a numeric one caught it in a single run.
+
+### What the air is made of, and how it is drawn
+
+Three primitives were tried. The first two are dead and the code is kept only as a
+record:
+
+1. **Points** (`air.gdshader`) — a starfield. Dots are not a medium.
+2. **Filaments / contours** (`air_draw.gdshader`) — streaklines as trailed tubes.
+   Fluid, but it reads as *hair*: a diagram OF the wind rather than the wind.
+3. **Volumetric dye** (`air_fog.gdshader`) — **this is the one.** A `FogVolume` and
+   a `shader_type fog` shader: the air carries dye, and Godot raymarches it. A
+   fluid is a density, not a curve. Thermal = a luminous warm column. Ground = the
+   pale motionless hush against rock. Wake = torn murk. Rock = a clean hole in the
+   smoke, because air cannot be there.
+
+**Cheap fluid dynamics, without a solver.** Two tricks do nearly all the work:
+- **Curl noise.** The curl of a noise field is divergence-free by construction, so
+  it cannot make sources or sinks — it *has* to swirl. Layer octaves and you get
+  eddies inside eddies, which is the actual signature of turbulence. It costs a
+  few noise taps.
+- **Advected dye.** Back-trace each sample point along the flow and read the dye
+  there, so smoke stretches and shears along the streamlines instead of sitting
+  still in space.
+
+If real vortex shedding is wanted later, a Stam stable-fluids solver (advect, then
+Jacobi-project) on a 64³ 3D texture via Godot compute shaders is well within a
+4060. It is not needed for the percept to work — this one already flies.
+
+**Ego-motion cancellation.** The medium is perceived in a frame carried along at
+the bird's own velocity, so what you see is the air's *own* motion and not your
+speed through it — a wind tunnel, where the body holds still and the fluid moves.
+This is the honest percept, not a cheat: a wing subtracts its own airspeed exactly
+as vision subtracts your gait. You do not perceive the rush. You perceive the wind.
+It buys the ground for free, too — still air near rock *appears* still while
+everything else streams, so the floor is where the world stops moving.
+
+**Gotcha that cost an hour:** `return` is illegal inside a `fog()` processor. Godot
+fails the compile and renders you *nothing*, in silence. Mask, don't return.
+
+### Still open in the air sense
+
+- Landing has not been tested. The boundary-layer hush should read as a floor, but
+  nobody has tried to actually touch down on it yet. §9 is unproven.
+- The analytic SDF ignores the collision mesh's noise displacement, so the felt
+  surface and the solid surface disagree by a metre or two. Fix before landing.
+- The dye is blobby at close range; froxel resolution is the limit.
+- Warmth. It is currently beautiful but *cold* — a physics visualisation, not a
+  sacred place. See §5: this is the anti-goal that matters most, and it is not
+  solved.
+
 ---
 
 ## 12. Open Questions Beyond §8
