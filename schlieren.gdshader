@@ -35,7 +35,13 @@ const float SQUASH_DOWN = 1.35;
 const float BOUNDARY = 9.0;
 const float INFLOW_REACH = 4.0;
 
-float hash11(float n) { return fract(sin(n) * 43758.5453123); }
+// No sin() — this runs per pixel, and a transcendental per noise tap is real money.
+float hash11(float n) {
+	n = fract(n * 0.1031);
+	n *= n + 33.33;
+	n *= n + n;
+	return fract(n);
+}
 
 float vnoise(vec3 p) {
 	vec3 i = floor(p);
@@ -61,23 +67,24 @@ vec3 curl(vec3 p) {
 	return vec3(a - b, b - c, c - a) / (2.0 * e);
 }
 
-float scene_sdf(vec3 p) {
-	float d = 1e9;
+// Distance and normal in one pass. The islands are squashed spheres, so the
+// normal is analytic — the finite-difference gradient this replaces cost thirty
+// island tests per pixel, for exactly the same answer.
+vec4 scene_nearest(vec3 p) {
+	float best = 1e9;
+	vec3 n = vec3(0.0, 1.0, 0.0);
 	for (int i = 0; i < 5; i++) {
 		vec3 q = p - islands[i];
-		q.y /= (q.y > 0.0) ? SQUASH_UP : SQUASH_DOWN;
-		d = min(d, (length(q) - island_r[i]) * SQUASH_UP);
+		float s = (q.y > 0.0) ? SQUASH_UP : SQUASH_DOWN;
+		q.y /= s;
+		float len = max(length(q), 0.001);
+		float d = (len - island_r[i]) * SQUASH_UP;
+		if (d < best) {
+			best = d;
+			n = normalize(vec3(q.x, q.y / s, q.z) / len);
+		}
 	}
-	return d;
-}
-
-vec3 scene_grad(vec3 p) {
-	float e = 0.9;
-	vec3 g = vec3(
-		scene_sdf(p + vec3(e, 0, 0)) - scene_sdf(p - vec3(e, 0, 0)),
-		scene_sdf(p + vec3(0, e, 0)) - scene_sdf(p - vec3(0, e, 0)),
-		scene_sdf(p + vec3(0, 0, e)) - scene_sdf(p - vec3(0, 0, e)));
-	return (length(g) > 1e-5) ? normalize(g) : vec3(0.0, 1.0, 0.0);
+	return vec4(n, best);
 }
 
 float thermal_lift(vec3 p) {
@@ -126,8 +133,9 @@ void fragment() {
 	float speed = length(prevailing);
 	vec3 dir = (speed > 0.001) ? prevailing / speed : vec3(1.0, 0.0, 0.0);
 
-	float d = scene_sdf(world);
-	vec3 n = scene_grad(world);
+	vec4 near = scene_nearest(world);
+	vec3 n = near.xyz;
+	float d = near.w;
 	float near_rock = 1.0 - smoothstep(0.0, BOUNDARY * 2.2, max(d, 0.0));
 	float lee = max(dot(dir, n), 0.0) * near_rock;          // the wake: unstable
 	float lift = thermal_lift(world);
@@ -143,9 +151,9 @@ void fragment() {
 		+ smoothstep(0.8, 5.0, lift) * 0.55
 		+ speed * 0.012;                                     // calm air: almost nothing
 
-	// The direction of the bending follows the eddies themselves.
-	vec3 eddy = curl(world * 0.055 + vec3(0.0, TIME * 0.35, 0.0)) * 1.0
-		+ curl(world * 0.16 + vec3(TIME * 0.6, 0.0, 0.0)) * 0.4;
+	// The direction of the bending follows the eddies themselves. One octave —
+	// the second one cost as much as everything else here and you could not see it.
+	vec3 eddy = curl(world * 0.06 + vec3(0.0, TIME * 0.35, 0.0));
 
 	// Rising air stretches the distortion UPWARD, sinking air drags it down. The
 	// world does not merely wobble — it is pulled the way the air is going.

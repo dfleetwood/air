@@ -28,8 +28,14 @@ const float SQUASH_DOWN = 1.35;
 const float BOUNDARY = 9.0;
 const float INFLOW_REACH = 4.0;
 
+// No sin(). A sine-based hash is a transcendental op per noise tap, and this
+// shader runs once per FROXEL — hundreds of thousands of them — so it showed up
+// as whole milliseconds. This is the standard cheap integer-ish float hash.
 float hash11(float n) {
-	return fract(sin(n) * 43758.5453123);
+	n = fract(n * 0.1031);
+	n *= n + 33.33;
+	n *= n + n;
+	return fract(n);
 }
 
 float vnoise(vec3 p) {
@@ -46,29 +52,32 @@ float vnoise(vec3 p) {
 }
 
 float fbm(vec3 p) {
-	return 0.55 * vnoise(p)
-		+ 0.26 * vnoise(p * 2.03 + 17.3)
-		+ 0.13 * vnoise(p * 4.11 + 41.9)
-		+ 0.06 * vnoise(p * 8.07 + 73.1);
+	return 0.60 * vnoise(p)
+		+ 0.27 * vnoise(p * 2.03 + 17.3)
+		+ 0.13 * vnoise(p * 4.11 + 41.9);
 }
 
-float scene_sdf(vec3 p) {
-	float d = 1e9;
+// Distance AND normal to the nearest island in a single pass.
+//
+// This used to be a finite-difference gradient: six SDF evaluations, each looping
+// all five islands, i.e. thirty island tests per sample. But these islands are
+// squashed spheres, so the normal is ANALYTIC — no differencing needed. Same
+// answer, thirty times less of it. This one change is most of the frame budget.
+vec4 scene_nearest(vec3 p) {
+	float best = 1e9;
+	vec3 n = vec3(0.0, 1.0, 0.0);
 	for (int i = 0; i < 5; i++) {
 		vec3 q = p - islands[i];
-		q.y /= (q.y > 0.0) ? SQUASH_UP : SQUASH_DOWN;
-		d = min(d, (length(q) - island_r[i]) * SQUASH_UP);
+		float s = (q.y > 0.0) ? SQUASH_UP : SQUASH_DOWN;
+		q.y /= s;
+		float len = max(length(q), 0.001);
+		float d = (len - island_r[i]) * SQUASH_UP;
+		if (d < best) {
+			best = d;
+			n = normalize(vec3(q.x, q.y / s, q.z) / len);
+		}
 	}
-	return d;
-}
-
-vec3 scene_grad(vec3 p) {
-	float e = 0.8;
-	vec3 g = vec3(
-		scene_sdf(p + vec3(e, 0, 0)) - scene_sdf(p - vec3(e, 0, 0)),
-		scene_sdf(p + vec3(0, e, 0)) - scene_sdf(p - vec3(0, e, 0)),
-		scene_sdf(p + vec3(0, 0, e)) - scene_sdf(p - vec3(0, 0, e)));
-	return (length(g) > 1e-5) ? normalize(g) : vec3(0.0, 1.0, 0.0);
+	return vec4(n, best);
 }
 
 vec3 thermal_vel(vec3 p) {
@@ -104,14 +113,15 @@ vec3 thermal_vel(vec3 p) {
 
 void fog() {
 	vec3 p = WORLD_POSITION;
-	float d = scene_sdf(p);
+	vec4 near = scene_nearest(p);
+	vec3 n = near.xyz;
+	float d = near.w;
 
 	// Rock is a clean hole in the smoke: air cannot be there, so no dye is. This
 	// has to be a MASK and not an early return — `return` is illegal inside a fog
 	// processor, and Godot will fail the compile silently and render you nothing.
 	float air = step(0.0, d);
 
-	vec3 n = scene_grad(p);
 	float surf = 1.0 - smoothstep(0.0, BOUNDARY, d);   // 1 against the rock
 	vec3 th = thermal_vel(p);
 	vec3 flow = prevailing;
